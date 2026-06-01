@@ -20,7 +20,7 @@ const PITCH_LIMIT = Math.PI / 2 - 0.01;
 let cloud = {};   // 부위 이름 -> [{ home, base, phase }]
 let charge = {};  // 부위 이름 -> 차징 0..1 (마우스를 누른 채 조준한 시간만큼 충전)
 let hold = {};    // 부위 이름 -> 완성 후 형태를 고정할 남은 시간(초)
-const SCATTER_RADIUS = 1200; // 떠다닐 때 home에서 흩어지는 반경
+const SCATTER_RADIUS = 1000; // 떠다닐 때 home에서 흩어지는 반경
 const DRIFT_AMP = 20;        // 떠다니는 진동 폭
 const TARGET_POINTS = 15000; // 표면 샘플링으로 만들 점의 대략적 총 개수 (성능에 맞춰 조절)
 const CHARGE_TIME = 1.0;     // 가득 차징되는 데 걸리는 시간(초)
@@ -242,7 +242,20 @@ function draw() {
   strokeWeight(2.5);
   for (const name of PARTS) {
     const a = charge[name];
-    stroke(lerp(90, 255, a), lerp(140, 255, a), lerp(190, 255, a));
+    let col;
+    if (hold[name] > 0) {
+      // 완성 후 고정 중: 타이머가 줄수록 시안 → 주황 (곧 분산을 예고)
+      const h = hold[name] / HOLD_TIME; // 1(완성) -> 0(곧 분산)
+      col = lerpColor(color(255, 140, 40), color(170, 240, 255), h);
+      if (h < 0.25) { // 막바지엔 깜빡여서 경고
+        const blink = 0.5 + 0.5 * sin(tt * 16);
+        col = lerpColor(color(30, 20, 10), col, blink);
+      }
+    } else {
+      // 떠다님(어두운 청색) → 차징(밝은 시안)
+      col = lerpColor(color(90, 140, 190), color(170, 240, 255), a);
+    }
+    stroke(col);
     beginShape(POINTS);
     for (const pt of cloud[name]) {
       const dx = pt.base.x + sin(tt + pt.phase) * DRIFT_AMP;
@@ -257,55 +270,109 @@ function draw() {
     endShape();
   }
 
-  // 조준 중인 부위를 빨간 박스로 표시 (조준 피드백)
+  // 조준 중인 부위를 코너 브래킷으로 표시 (디버그 박스보다 세련된 타겟팅 UI)
   if (hit) {
     const b = worldBounds[hit];
-    noFill();
-    stroke(255, 40, 40);
-    strokeWeight(1);
+    const pulse = 0.6 + 0.4 * sin(tt * 4);
     push();
-    translate(b.center.x, b.center.y, b.center.z);
-    box(b.size.x, b.size.y, b.size.z);
+    blendMode(ADD); // 가산 혼합 → 은은하게 빛남
+    noFill();
+    stroke(120, 230, 255, 200 * pulse);
+    strokeWeight(2);
+    drawBracketBox(b.min, b.max);
+    blendMode(BLEND);
     pop();
   }
 
   // 화면 중앙 HUD: 조준점(ray) + 차징 게이지
-  drawHUD(hit ? charge[hit] : 0);
+  drawHUD(hit ? charge[hit] : 0, !!hit);
 }
 
-// 화면 좌표계(2D HUD)로 전환해 조준점과 원형 차징 게이지를 그린다.
-function drawHUD(chargeAmt) {
+// AABB의 8개 코너에 짧은 ㄱ자 선분을 그려 타겟팅 브래킷 모양을 만든다.
+function drawBracketBox(bmin, bmax) {
+  const fx = (bmax.x - bmin.x) * 0.18; // 코너에서 뻗는 길이 (각 변의 18%)
+  const fy = (bmax.y - bmin.y) * 0.18;
+  const fz = (bmax.z - bmin.z) * 0.18;
+  for (const xi of [0, 1]) {
+    for (const yi of [0, 1]) {
+      for (const zi of [0, 1]) {
+        const cx = xi ? bmax.x : bmin.x;
+        const cy = yi ? bmax.y : bmin.y;
+        const cz = zi ? bmax.z : bmin.z;
+        const sx = xi ? -fx : fx; // 반대 코너 쪽으로 짧게
+        const sy = yi ? -fy : fy;
+        const sz = zi ? -fz : fz;
+        line(cx, cy, cz, cx + sx, cy, cz);
+        line(cx, cy, cz, cx, cy + sy, cz);
+        line(cx, cy, cz, cx, cy, cz + sz);
+      }
+    }
+  }
+}
+
+// 카메라 바로 앞에 빌보드(시선에 수직인 평면)로 조준점 + 원형 차징 게이지를 그린다.
+// 투영을 전환하지 않고 장면과 같은 카메라를 쓰므로 항상 화면 중앙에 확실히 렌더된다.
+function drawHUD(chargeAmt, aiming) {
+  const D = 200;                              // 카메라 앞 거리
+  const wpp = (2 * D * tan(PI / 6)) / height; // 거리 D에서 화면 1px당 월드 길이
+  const c = p5.Vector.add(pos, p5.Vector.mult(camDir, D));         // 화면 중앙 지점
+  const r = p5.Vector.cross(camDir, createVector(0, 1, 0)).normalize(); // 화면 가로축
+  const u = p5.Vector.cross(r, camDir).normalize();                    // 화면 세로축
+
   push();
-  camera();                  // 기본 카메라
-  ortho();                   // 직교 투영 → 1단위 = 1픽셀, 원점이 화면 중앙
   drawingContext.disable(drawingContext.DEPTH_TEST); // 항상 위에 보이도록
-
-  // 조준점(crosshair): 중앙에서 어디를 쏘는지 표시
-  stroke(255);
-  strokeWeight(2);
-  const gap = 6, len = 12;
-  line(-gap - len, 0, -gap, 0);
-  line(gap, 0, gap + len, 0);
-  line(0, -gap - len, 0, -gap);
-  line(0, gap, 0, gap + len);
-  strokeWeight(4);
-  point(0, 0);
-
-  // 원형 차징 게이지
-  const R = 34;
   noFill();
-  stroke(255, 255, 255, 70);   // 배경 원
-  strokeWeight(3);
-  circle(0, 0, R * 2);
-  if (chargeAmt > 0) {          // 진행 호 (위에서 시계방향으로 채워짐)
+  const core = aiming ? color(120, 230, 255) : color(255);
+
+  // 조준점: 어두운 외곽선 위에 밝은 코어 → 밝은 점구름 위에서도 보이게
+  stroke(0, 0, 0, 200); strokeWeight(5 * wpp);
+  bbCross(c, r, u, 6 * wpp, 16 * wpp);
+  stroke(core);         strokeWeight(2 * wpp);
+  bbCross(c, r, u, 6 * wpp, 16 * wpp);
+
+  // 차징 게이지: 배경 원 + 진행 호 (위에서 시계방향)
+  const R = 34 * wpp;
+  stroke(255, 255, 255, 90); strokeWeight(2.5 * wpp);
+  bbArc(c, r, u, R, 0, TWO_PI, 48);
+  if (chargeAmt > 0) {
     const full = chargeAmt >= 0.999;
     stroke(full ? color(80, 230, 130) : color(80, 200, 255));
-    strokeWeight(5);
-    arc(0, 0, R * 2, R * 2, -HALF_PI, -HALF_PI + TWO_PI * chargeAmt, OPEN);
+    strokeWeight(5 * wpp);
+    bbArc(c, r, u, R, -HALF_PI, -HALF_PI + TWO_PI * chargeAmt, max(2, ceil(48 * chargeAmt)));
   }
 
   drawingContext.enable(drawingContext.DEPTH_TEST);
   pop();
+}
+
+// 빌보드 평면(가로축 r, 세로축 u, 중심 c) 위의 점 (a: 가로, b: 세로)
+function bbPoint(c, r, u, a, b) {
+  return createVector(c.x + r.x * a + u.x * b,
+                      c.y + r.y * a + u.y * b,
+                      c.z + r.z * a + u.z * b);
+}
+
+// 빌보드 십자선 4개 (중앙에 gap만큼 띄우고 len 길이로)
+function bbCross(c, r, u, gap, len) {
+  let p1 = bbPoint(c, r, u, -gap - len, 0), p2 = bbPoint(c, r, u, -gap, 0);
+  line(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+  p1 = bbPoint(c, r, u, gap, 0); p2 = bbPoint(c, r, u, gap + len, 0);
+  line(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+  p1 = bbPoint(c, r, u, 0, -gap - len); p2 = bbPoint(c, r, u, 0, -gap);
+  line(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+  p1 = bbPoint(c, r, u, 0, gap); p2 = bbPoint(c, r, u, 0, gap + len);
+  line(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+}
+
+// 빌보드 호/원 (각 a0~a1을 segs등분한 폴리라인)
+function bbArc(c, r, u, R, a0, a1, segs) {
+  beginShape();
+  for (let i = 0; i <= segs; i++) {
+    const ang = lerp(a0, a1, i / segs);
+    const p = bbPoint(c, r, u, cos(ang) * R, sin(ang) * R);
+    vertex(p.x, p.y, p.z);
+  }
+  endShape();
 }
 
 // WASD 수평 이동 + Space/Shift 수직 이동 (새 fps.js의 updateMovement 참고)
