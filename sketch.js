@@ -20,10 +20,11 @@ const PITCH_LIMIT = Math.PI / 2 - 0.01;
 let cloud = {};   // 부위 이름 -> [{ home, base, phase }]
 let charge = {};  // 부위 이름 -> 차징 0..1 (마우스를 누른 채 조준한 시간만큼 충전)
 let hold = {};    // 부위 이름 -> 완성 후 형태를 고정할 남은 시간(초)
-const SCATTER_RADIUS = 120; // 떠다닐 때 home에서 흩어지는 반경
+const SCATTER_RADIUS = 1200; // 떠다닐 때 home에서 흩어지는 반경
 const DRIFT_AMP = 20;        // 떠다니는 진동 폭
+const TARGET_POINTS = 15000; // 표면 샘플링으로 만들 점의 대략적 총 개수 (성능에 맞춰 조절)
 const CHARGE_TIME = 1.0;     // 가득 차징되는 데 걸리는 시간(초)
-const DECHARGE_TIME = 1.0;   // 분산되는 시간(초)
+const DECHARGE_TIME = 3.0;   // 분산되는 시간(초)
 const HOLD_TIME = 10.0;       // 완성 후 형태를 유지하는 시간(초)
 
 function preload() {
@@ -144,22 +145,59 @@ function pickPart(ro, rd) {
   return best;
 }
 
-// 부위마다 정점을 home으로 삼아 포인트를 만들고, home 근처에 흩뿌려 base를 둔다.
+// 삼각형 면을 면적 비례로 샘플링해 표면 위에 점을 촘촘히 뿌린다.
+// (정점만 쓰면 low-poly 코너 몇 개뿐이라 형태가 안 보임 → 면을 채워야 실루엣이 산다.)
 function buildCloud() {
+  // 1) 모든 부위의 삼각형과 넓이를 모아 전체 표면적을 구한다 (로컬 좌표).
+  let totalArea = 0;
+  const tris = {};
+  for (const name of PARTS) {
+    tris[name] = [];
+    const g = parts[name];
+    for (const f of g.faces) {
+      const a = g.vertices[f[0]], b = g.vertices[f[1]], c = g.vertices[f[2]];
+      const area = triArea(a, b, c);
+      tris[name].push({ a, b, c, area });
+      totalArea += area;
+    }
+  }
+  const density = TARGET_POINTS / max(totalArea, 1e-6); // 면적당 점 개수
+
+  // 2) 넓이에 비례한 수만큼 각 삼각형 표면에 무작위로 점을 찍는다.
   for (const name of PARTS) {
     cloud[name] = [];
     charge[name] = 0;
     hold[name] = 0;
-    for (const v of parts[name].vertices) {
-      const home = modelToWorld(v);
-      const off = p5.Vector.random3D().mult(random(0.3, 1) * SCATTER_RADIUS);
-      cloud[name].push({
-        home,
-        base: p5.Vector.add(home, off),
-        phase: random(TWO_PI),
-      });
+    for (const tri of tris[name]) {
+      const n = max(1, round(tri.area * density));
+      for (let i = 0; i < n; i++) {
+        const home = modelToWorld(sampleTriangle(tri.a, tri.b, tri.c));
+        const off = p5.Vector.random3D().mult(random(0.3, 1) * SCATTER_RADIUS);
+        cloud[name].push({
+          home,
+          base: p5.Vector.add(home, off),
+          phase: random(TWO_PI),
+        });
+      }
     }
   }
+}
+
+// 삼각형 넓이 (두 변 외적의 크기 / 2)
+function triArea(a, b, c) {
+  const ab = p5.Vector.sub(b, a);
+  const ac = p5.Vector.sub(c, a);
+  return p5.Vector.cross(ab, ac).mag() * 0.5;
+}
+
+// 삼각형 내부의 균일 무작위 점 (barycentric 샘플링)
+function sampleTriangle(a, b, c) {
+  let r1 = random(), r2 = random();
+  if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; } // 평행사변형 → 삼각형으로 접기
+  const p = a.copy();
+  p.add(p5.Vector.mult(p5.Vector.sub(b, a), r1));
+  p.add(p5.Vector.mult(p5.Vector.sub(c, a), r2));
+  return p;
 }
 
 function draw() {
@@ -199,9 +237,9 @@ function draw() {
     }
   }
 
-  // 포인트 클라우드: 비활성이면 base 주변을 떠다니고, 활성되면 home(정점)으로 모핑
+  // 포인트 클라우드: 비활성이면 base 주변을 떠다니고, 활성되면 home(표면)으로 모핑
   const tt = millis() * 0.001;
-  strokeWeight(4);
+  strokeWeight(2.5);
   for (const name of PARTS) {
     const a = charge[name];
     stroke(lerp(90, 255, a), lerp(140, 255, a), lerp(190, 255, a));
