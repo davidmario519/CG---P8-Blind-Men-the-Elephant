@@ -2,7 +2,8 @@
 .DS_Store
 
 # 산출물 / 대용량 캡처 (화면 녹화 등)
-docs/
+docs/Screen Recording 2026-06-01 at 6.38.30 PM.mov
+
 
 # 3D 원본 파일 (과제 실행엔 불필요, 용량 큼)
 *.zip
