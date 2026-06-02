@@ -25,6 +25,10 @@ let initPos, initYaw, initPitch;
 // 배경음악 (브라우저 자동재생 정책상 첫 클릭 때 재생 시작)
 let bgm;
 
+// 점들이 모여들 때(차징 중) 나는 효과음
+let sfxGather;
+let gathering = false; // 직전 프레임에 모여드는 중이었는지 (재생 on/off 엣지 감지)
+
 const MOUSE_SENS = 0.0025;
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
 
@@ -45,6 +49,7 @@ function preload() {
     parts[name] = loadModel(`src/elpt/${name}.obj`);
   }
   bgm = loadSound('src/sequence_02.mp3');
+  sfxGather = loadSound('src/crackles.wav');
 }
 
 function setup() {
@@ -255,6 +260,7 @@ function draw() {
   // 차징 / 고정(hold) / 방전 상태 갱신
   const dt = deltaTime / 1000;
   const locked = !!document.pointerLockElement;
+  let anyGathering = false; // 이번 프레임에 모여드는(차징 중인) 부위가 있는지
   for (const name of PARTS) {
     if (hold[name] > 0) {
       // 완성된 부위: HOLD_TIME 동안 형태를 고정
@@ -263,6 +269,7 @@ function draw() {
     } else {
       const charging = locked && mouseIsPressed && name === hit;
       if (charging) {
+        anyGathering = true;
         charge[name] = min(1, charge[name] + dt / CHARGE_TIME);
         if (charge[name] >= 1) hold[name] = HOLD_TIME; // 가득 차면 고정 타이머 시작
       } else {
@@ -270,6 +277,17 @@ function draw() {
       }
     }
   }
+
+  // 모여들기 시작/끝에 맞춰 crackles 효과음을 켜고 끈다 (길이가 긴 클립이라 일회성 play X).
+  if (sfxGather && sfxGather.isLoaded()) {
+    if (anyGathering && !gathering) {
+      sfxGather.setVolume(0.7);
+      sfxGather.play(); // 모여들기 시작 → 처음부터 재생
+    } else if (!anyGathering && gathering) {
+      sfxGather.stop(); // 다 모이거나 손을 떼면 멈춤
+    }
+  }
+  gathering = anyGathering;
 
   // 포인트 클라우드: 비활성이면 base 주변을 떠다니고, 활성되면 home(표면)으로 모핑
   const tt = millis() * 0.001;
