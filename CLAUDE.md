@@ -52,7 +52,7 @@ Pipeline:
 
 **Critical invariant:** `modelToWorld()` manually replays the exact transform
 `draw()` applies to the mesh — `translate(20,40,-20)` · `rotateX(PI)` ·
-`rotateY(HALF_PI)` · `scale(15)`. The AABBs are only correct while these two
+`rotateY(HALF_PI)` · `scale(22.5)`. The AABBs are only correct while these two
 stay identical. **If you change the mesh transform in `draw()`, update
 `modelToWorld()` to match (and vice-versa)**, or the boxes will desync from the
 model.
@@ -70,6 +70,8 @@ volume. Not maintained as part of this project.
 
 - **Camera:** yaw/pitch first-person rig. Mouse look via pointer lock; `WASD`
   to move; forward is `(sin(yaw), -cos(yaw))`, right is `(cos(yaw), sin(yaw))`.
-- **Up is `-y`** in this world (screen-up = negative Y); `Space`/`Shift` move
-  the camera up/down.
-- `R` resets the view to its initial position/orientation.
+- **Up is `-y`** in this world (screen-up = negative Y). The camera stands on a
+  gray floor `plane` at `groundY` (the scene's lowest point, i.e. max world Y);
+  `Space` jumps and gravity (`velY`/`gravity`/`jumpSpeed`) pulls it back to
+  `standY = groundY - eyeHeight`. No free up/down fly anymore.
+- `R` resets the view to its initial position/orientation (and clears `velY`).

@@ -10,8 +10,20 @@ let camDir;         // 시선 방향 (= ray 방향)
 let moveSpeed = 10; // setup에서 장면 크기에 맞춰 보정
 let lastHit = null;
 
+// 점프/중력 상태 (위 = -y 월드이므로 중력은 +y 방향으로 가속)
+let velY = 0;        // 수직 속도
+let onGround = true; // 바닥에 닿아 있는지
+let groundY;         // 바닥 평면의 월드 y
+let standY;          // 바닥에 섰을 때 카메라(눈) y
+let eyeHeight;       // 바닥에서 눈까지 높이
+let gravity, jumpSpeed;
+let floorCx, floorCz, floorSize; // 바닥 평면 중심/크기
+
 // 리셋용 초기값
 let initPos, initYaw, initPitch;
+
+// 배경음악 (브라우저 자동재생 정책상 첫 클릭 때 재생 시작)
+let bgm;
 
 const MOUSE_SENS = 0.0025;
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
@@ -32,6 +44,7 @@ function preload() {
   for (const name of PARTS) {
     parts[name] = loadModel(`src/elpt/${name}.obj`);
   }
+  bgm = loadSound('src/sequence_02.mp3');
 }
 
 function setup() {
@@ -56,8 +69,20 @@ function setup() {
   const camDist = max(sceneSize.x, sceneSize.y, sceneSize.z) * 1.4;
   moveSpeed = max(5, camDist * 0.015);
 
+  // 바닥/점프 설정 (위 = -y 월드)
+  groundY = sMax.y;                                    // 장면의 가장 아래(= 월드 y 최대)에 바닥을 깐다
+  eyeHeight = sceneSize.y * 0.5;                       // 섰을 때 눈높이는 장면 중앙과 같아지게
+  standY = groundY - eyeHeight;                        // 바닥에 섰을 때 카메라 y (= sceneCenter.y)
+  gravity = sceneSize.y * 4;                           // 중력 가속도 (월드단위/초^2)
+  jumpSpeed = sqrt(2 * gravity * sceneSize.y * 0.45);  // 점프 최고점 ≈ 장면 높이의 45%
+  velY = 0;
+  onGround = true;
+  floorCx = sceneCenter.x;
+  floorCz = sceneCenter.z;
+  floorSize = camDist * 12;                            // 가장자리가 잘 안 보이게 넉넉히
+
   // 코끼리 옆(폭 방향 = x축)에 서서 중심을 바라보도록 yaw/pitch를 역산.
-  pos = createVector(sceneCenter.x + camDist, sceneCenter.y, sceneCenter.z);
+  pos = createVector(sceneCenter.x + camDist, standY, sceneCenter.z);
   const d = p5.Vector.sub(sceneCenter, pos).normalize();
   yaw = atan2(d.x, -d.z);
   pitch = -asin(d.y);
@@ -67,15 +92,15 @@ function setup() {
   initPitch = pitch;
   updateDir();
 
-  console.log('[조작] 클릭: 마우스룩 / 마우스 꾹: 조준한 부위 차징(완성되면 잠시 고정 후 분산) / WASD·Space·Shift: 이동 / R: 리셋');
+  console.log('[조작] 클릭: 마우스룩 / 마우스 꾹: 조준한 부위 차징(완성되면 잠시 고정 후 분산) / WASD: 이동 / Space: 점프 / R: 리셋');
 }
 
 // 로컬(모델) 좌표 -> 월드 좌표.
 // draw()의 transform 순서와 반드시 동일해야 한다:
-//   translate(20,40,-20) · rotateX(PI) · rotateY(HALF_PI) · scale(15)
+//   translate(20,40,-20) · rotateX(PI) · rotateY(HALF_PI) · scale(22.5)
 function modelToWorld(v) {
   let p = v.copy();
-  p.mult(15);                        // scale(15)
+  p.mult(22.5);                      // scale(22.5)  (기존 15에서 1.5배)
   p = createVector(p.z, p.y, -p.x);  // rotateY(HALF_PI):  (x,y,z) -> (z, y, -x)
   p = createVector(p.x, -p.y, -p.z); // rotateX(PI):       (x,y,z) -> (x, -y, -z)
   p.add(20, 40, -20);                // translate(20,40,-20)
@@ -210,6 +235,15 @@ function draw() {
          pos.x + camDir.x, pos.y + camDir.y, pos.z + camDir.z,
          0, 1, 0);
   perspective(radians(60), width / height, 1, 10000);
+
+  // // 회색 바닥 평면 (수평으로 눕혀서 깐다)
+  // push();
+  // noStroke();
+  // fill(120);
+  // translate(floorCx, groundY, floorCz);
+  // rotateX(HALF_PI);
+  // plane(floorSize, floorSize);
+  // pop();
 
   // 화면 정중앙(= 시선 방향)으로 ray를 쏴서 맞은 부위를 찾는다.
   const hit = pickPart(pos, camDir);
@@ -375,7 +409,7 @@ function bbArc(c, r, u, R, a0, a1, segs) {
   endShape();
 }
 
-// WASD 수평 이동 + Space/Shift 수직 이동 (새 fps.js의 updateMovement 참고)
+// WASD 수평 이동 + Space 점프(중력) (새 fps.js의 updateMovement 참고)
 function updateMovement() {
   const forwardX = sin(yaw), forwardZ = -cos(yaw);
   const rightX = cos(yaw), rightZ = sin(yaw);
@@ -388,13 +422,28 @@ function updateMovement() {
   pos.x += dx;
   pos.z += dz;
 
-  if (keyIsDown(32)) pos.y -= moveSpeed; // Space: 위 (화면 위 = -y)
-  if (keyIsDown(16)) pos.y += moveSpeed; // Shift: 아래
+  // 점프 + 중력 (위 = -y 이므로 중력은 +y 방향으로 가속)
+  const dt = deltaTime / 1000;
+  velY += gravity * dt;
+  pos.y += velY * dt;
+  if (pos.y >= standY) { // 바닥에 닿으면 착지
+    pos.y = standY;
+    velY = 0;
+    onGround = true;
+  } else {
+    onGround = false;
+  }
 }
 
 // 클릭하면 포인터락으로 마우스룩 시작
 function mousePressed() {
   requestPointerLock();
+  // 브라우저 자동재생 정책: 사용자 클릭 시점에 오디오 컨텍스트를 깨우고 BGM을 반복 재생한다.
+  userStartAudio();
+  if (bgm && bgm.isLoaded() && !bgm.isPlaying()) {
+    bgm.setVolume(0.5);
+    bgm.loop();
+  }
 }
 
 // 마우스 이동 -> yaw/pitch 회전 (포인터락 상태에서만)
@@ -411,10 +460,16 @@ function mouseMoved(e) { look(e); }
 function mouseDragged(e) { look(e); }
 
 function keyPressed() {
+  if ((key === ' ' || keyCode === 32) && onGround) { // Space: 바닥에서 점프
+    velY = -jumpSpeed; // 위(-y) 방향으로 튀어오름
+    onGround = false;
+  }
   if (key === 'r' || key === 'R') {
     pos = initPos.copy();
     yaw = initYaw;
     pitch = initPitch;
+    velY = 0;
+    onGround = true;
     for (const name of PARTS) { charge[name] = 0; hold[name] = 0; } // 차징/고정 해제 → 다시 분산
     lastHit = null;
   }
